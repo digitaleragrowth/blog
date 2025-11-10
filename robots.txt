@@ -1,0 +1,7 @@
+User-agent: *
+Disallow: /privacy.html
+Disallow: /privacy-ar.html
+Disallow: /thank-you.html
+Disallow: /thank-you-ar.html
+
+Sitemap: https://eduexpoqatar.com/sitemap.xml
