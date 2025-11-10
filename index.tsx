@@ -1003,4 +1003,704 @@ document.addEventListener('DOMContentLoaded', () => {
                 // 1. Create a new, separate Google Sheet for sponsorship inquiries.
                 // 2. IMPORTANT: Rename the first sheet (the tab at the bottom) to exactly "SponsorshipRegistrations".
                 // 3. In the first row of the "SponsorshipRegistrations" sheet, add these exact headers:
-                //    Timestamp, form_source, name, country, phone, email, website, company, job_title, company_field,
+                //    Timestamp, form_source, name, country, phone, email, website, company, job_title, company_field, message, consent
+                // 4. Go to Extensions > Apps Script and paste the universal script code provided in the documentation.
+                // 5. Click Deploy > New deployment.
+                // 6. Choose "Web app", set "Who has access" to "Anyone", and click Deploy.
+                // 7. Authorize the script when prompted.
+                // 8. Copy the NEW Web app URL and provide it in the next prompt so I can insert it below.
+                // =========================================================================================
+                const googleSheetWebAppUrl = 'https://script.google.com/macros/s/AKfycbwq3S7GQikOlmmWhh5d3aIkC8uTWtIG6UnXcaPzmwdlZ8m5b3kIRKgafYW9zQV1rB-u/exec';
+    
+                try {
+                    // FIX: Removed redundant developer check for a placeholder URL. Since the URL is
+                    // now hardcoded, this comparison would always be false and was flagged as an
+                    // error by the TypeScript compiler.
+                    const formData = new FormData(form);
+                    const response = await fetch(googleSheetWebAppUrl, {
+                        method: 'POST',
+                        body: new URLSearchParams(formData as any)
+                    });
+    
+                    if (response.ok) {
+                        const result = await response.json();
+                        if (result.result === 'success') {
+                            form.style.display = 'none';
+                            successMessage.style.display = 'block';
+                            window.scrollTo(0, 0);
+                        } else {
+                            throw new Error(result.error || 'The script returned an unknown error.');
+                        }
+                    } else {
+                        throw new Error(`Submission failed. Status: ${response.status}`);
+                    }
+                } catch (error) {
+                    console.error('Sponsorship Inquiry Error:', error);
+                    alert(t.submissionErrorInquiry + (error as Error).message);
+                    if (submitButton) {
+                        submitButton.disabled = false;
+                        submitButton.textContent = t.submitInquiry;
+                    }
+                }
+            } else {
+                const firstInvalidField = form.querySelector('.invalid, .error-message[style*="block"]');
+                if (firstInvalidField) {
+                    firstInvalidField.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
+        });
+    }
+
+    function initializeSpeakerRegistrationForm() {
+        const form = document.getElementById('speaker-registration-form') as HTMLFormElement;
+        const successMessage = document.getElementById('speaker-form-success');
+        if (!form || !successMessage) return;
+
+        const inputs: HTMLElement[] = Array.from(form.querySelectorAll('input[required], select[required], textarea[required]'));
+        const day1Container = document.getElementById('session-day1-group');
+        const day2Container = document.getElementById('session-day2-group');
+        const consentPromoGroup = document.getElementById('consent-promotional-group');
+        const consentRecordGroup = document.getElementById('consent-recording-group');
+        
+        // --- Simplified File Upload Logic ---
+        const fileInput = document.getElementById('form-speaker-headshot-upload') as HTMLInputElement;
+        const fileNameDisplay = document.getElementById('file-name-display') as HTMLElement;
+        
+        if (fileInput && fileNameDisplay) {
+            fileInput.addEventListener('change', () => {
+                if (fileInput.files && fileInput.files.length > 0) {
+                    fileNameDisplay.textContent = fileInput.files[0].name;
+                } else {
+                    fileNameDisplay.textContent = t.noFileChosen;
+                }
+                // Trigger validation to show errors immediately if any
+                validateField(fileInput);
+            });
+        }
+        // --- End Simplified File Upload Logic ---
+
+
+        const customValidation = (): boolean => {
+            let allValid = true;
+
+            const day1Checked = day1Container?.querySelectorAll('input[type="checkbox"]:checked').length > 0;
+            const day2Checked = day2Container?.querySelectorAll('input[type="checkbox"]:checked').length > 0;
+            if (day1Container && day2Container && !day1Checked && !day2Checked) {
+                showError(day1Container, t.sessionRequired);
+                allValid = false;
+            } else {
+                if(day1Container) clearError(day1Container);
+                if(day2Container) clearError(day2Container);
+            }
+
+            const promoChecked = consentPromoGroup?.querySelector('input[type="radio"]:checked');
+            if(consentPromoGroup && !promoChecked) {
+                showError(consentPromoGroup, t.optionRequired);
+                allValid = false;
+            } else if (consentPromoGroup) {
+                 clearError(consentPromoGroup);
+            }
+            
+            const recordChecked = consentRecordGroup?.querySelector('input[type="radio"]:checked');
+            if(consentRecordGroup && !recordChecked) {
+                showError(consentRecordGroup, t.optionRequired);
+                allValid = false;
+            } else if (consentRecordGroup) {
+                 clearError(consentRecordGroup);
+            }
+
+            return allValid;
+        };
+        
+        inputs.forEach(input => {
+            const eventType = ['select-one', 'textarea', 'checkbox', 'file', 'radio'].includes((input as HTMLInputElement).type) ? 'change' : 'input';
+            input.addEventListener(eventType, () => validateField(input));
+        });
+        
+        day1Container?.addEventListener('change', customValidation);
+        day2Container?.addEventListener('change', customValidation);
+        consentPromoGroup?.addEventListener('change', customValidation);
+        consentRecordGroup?.addEventListener('change', customValidation);
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+
+            const isFormValid = inputs.map(input => validateField(input)).every(Boolean);
+            const isCustomValid = customValidation();
+
+            if (isFormValid && isCustomValid) {
+                const submitButton = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+                if (submitButton) {
+                    submitButton.disabled = true;
+                    submitButton.textContent = t.submitting;
+                }
+                
+                // =========================================================================================
+                // --- ROBUST GOOGLE SHEETS INTEGRATION FOR SPEAKERS ---
+                // =========================================================================================
+                // !! CRITICAL UPDATE FOR GOOGLE DRIVE UPLOAD !!
+                // 1. In your Google Sheet, rename the sheet tab to "SpeakerRegistrations".
+                // 2. IMPORTANT: You must have a column named `headshot_link` where the final Google Drive link will be stored.
+                // 3. The headers in the first row should be exactly as follows (order matters):
+                //    Timestamp, form_source, name, job_title_organization, email, phone, linkedin_website, country, session-day1, session-day2, why_speak, bio, headshot_link, past_experience, consent-promotional, consent-recording
+                // 4. You MUST update your Google Apps Script to handle the file upload. 
+                //    The form will send `headshot_filename`, `headshot_mimetype`, and `headshot_base64`.
+                //    Your script should use this data to create a file in Google Drive and store its URL in the `headshot_link` column.
+                //    A sample script has been provided in the response.
+                // 5. Deploy/re-deploy your Apps Script with "Anyone" access and paste the new URL below.
+                // =========================================================================================
+                const googleSheetWebAppUrl = 'https://script.google.com/macros/s/AKfycbzObRjQD4ck7tQ02_N9IY9SWtXWFGCVUhrq8eSmGsC7jC1rnSrY2rXe3npuuwgTEnJd/exec';
+
+                const sheetFormData = new FormData(form);
+                const file = fileInput.files ? fileInput.files[0] : null;
+                
+                try {
+                    if (file) {
+                        // Resize, compress, and convert file to base64 to prevent fetch errors
+                        const base64String = await fileToBase64(file);
+                        
+                        // Since we convert to JPEG, the mimetype and filename should be updated for the script
+                        const originalFilename = file.name.substring(0, file.name.lastIndexOf('.') > 0 ? file.name.lastIndexOf('.') : file.name.length);
+                        const newFilename = `${originalFilename}.jpg`;
+
+                        sheetFormData.append('headshot_filename', newFilename);
+                        sheetFormData.append('headshot_mimetype', 'image/jpeg');
+                        sheetFormData.append('headshot_base64', base64String);
+                    }
+                    // The original file input is not needed by the script
+                    sheetFormData.delete('headshot_upload');
+
+                    const response = await fetch(googleSheetWebAppUrl, {
+                        method: 'POST',
+                        body: new URLSearchParams(sheetFormData as any)
+                    });
+
+                    if (response.ok) {
+                        const result = await response.json();
+                        if (result.result === 'success') {
+                            form.style.display = 'none';
+                            successMessage.style.display = 'block';
+                            window.scrollTo(0, 0);
+                        } else {
+                            throw new Error(result.error || 'The script returned an unknown error.');
+                        }
+                    } else {
+                        throw new Error(`Submission failed. Status: ${response.status}`);
+                    }
+                } catch (error) {
+                    console.error('Speaker Submission Error:', error);
+                    alert(t.submissionErrorApplication + (error as Error).message);
+                    if (submitButton) {
+                        submitButton.disabled = false;
+                        submitButton.textContent = t.submitApplication;
+                    }
+                }
+
+            } else {
+                const firstInvalidField = form.querySelector('.invalid, .error-message[style*="block"]');
+                if (firstInvalidField) {
+                    firstInvalidField.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
+        });
+    }
+
+    function initializeSchoolGroupRegistrationForm() {
+        const form = document.getElementById('school-group-registration-form') as HTMLFormElement;
+        const successMessage = document.getElementById('school-group-form-success');
+        if (!form || !successMessage) return;
+
+        const inputs: HTMLElement[] = Array.from(form.querySelectorAll('[required]'));
+        inputs.forEach(input => {
+            const eventType = ['select-one', 'checkbox', 'number'].includes((input as HTMLInputElement).type) ? 'change' : 'input';
+            input.addEventListener(eventType, () => validateField(input));
+        });
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+
+            const isFormValid = inputs.map(input => validateField(input)).every(Boolean);
+            const submitButton = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+
+            if (isFormValid) {
+                if (submitButton) {
+                    submitButton.disabled = true;
+                    submitButton.textContent = t.submitting;
+                }
+
+                // =========================================================================================
+                // --- GOOGLE SHEETS INTEGRATION FOR SCHOOL GROUPS ---
+                // =========================================================================================
+                const googleSheetWebAppUrl = 'https://script.google.com/macros/s/AKfycbzgCIAubolBckuU5yjgeThOWg4iI4pVPDtkMt-jMI1murfQf_Vbah8k7EKWaTT-89cICA/exec';
+                
+                try {
+                    const formData = new FormData(form);
+                    const response = await fetch(googleSheetWebAppUrl, {
+                        method: 'POST',
+                        body: new URLSearchParams(formData as any)
+                    });
+
+                    if (response.ok) {
+                        const result = await response.json();
+                        if (result.result === 'success') {
+                            form.style.display = 'none';
+                            successMessage.style.display = 'block';
+                            window.scrollTo(0, 0);
+                        } else {
+                            throw new Error(result.error || 'The script returned an unknown error.');
+                        }
+                    } else {
+                        throw new Error(`Submission failed. Status: ${response.status}`);
+                    }
+                } catch (error) {
+                    console.error('School Group Registration Error:', error);
+                    alert(t.submissionErrorRegistration + (error as Error).message);
+                    if (submitButton) {
+                        submitButton.disabled = false;
+                        submitButton.textContent = t.submitGroupRegistration;
+                    }
+                }
+            } else {
+                const firstInvalidField = form.querySelector('.invalid, .error-message[style*="block"]');
+                if (firstInvalidField) {
+                    firstInvalidField.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
+        });
+    }
+
+    function initializeHackathonRegistrationForm() {
+        const form = document.getElementById('hackathon-registration-form') as HTMLFormElement;
+        const successMessage = document.getElementById('hackathon-form-success');
+        if (!form || !successMessage) return;
+
+        const inputs: HTMLElement[] = Array.from(form.querySelectorAll('[required]'));
+        inputs.forEach(input => {
+            const eventType = ['select-one', 'date', 'checkbox'].includes((input as HTMLInputElement).type) ? 'change' : 'input';
+            input.addEventListener(eventType, () => validateField(input));
+        });
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+
+            const isFormValid = inputs.map(input => validateField(input)).every(Boolean);
+
+            if (isFormValid) {
+                const submitButton = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+                if (submitButton) {
+                    submitButton.disabled = true;
+                    submitButton.textContent = t.submitting;
+                }
+
+                const googleSheetWebAppUrl = 'https://script.google.com/macros/s/AKfycbzL5gAJ3wL06k6-2N6_f0j7Vq-1F-9a8E_d7kCj3b-gH_iG-1kL_wZ-jI-9/exec'; // Placeholder URL
+
+                try {
+                    const formData = new FormData(form);
+                    const response = await fetch(googleSheetWebAppUrl, {
+                        method: 'POST',
+                        body: new URLSearchParams(formData as any)
+                    });
+
+                    if (response.ok) {
+                        const result = await response.json();
+                        if (result.result === 'success') {
+                            form.style.display = 'none';
+                            successMessage.style.display = 'block';
+                            window.scrollTo(0, 0);
+                        } else {
+                            throw new Error(result.error || 'The script returned an unknown error.');
+                        }
+                    } else {
+                        throw new Error(`Submission failed. Status: ${response.status}`);
+                    }
+                } catch (error) {
+                    console.error('Hackathon Registration Error:', error);
+                    alert(t.submissionErrorApplication + (error as Error).message);
+                    if (submitButton) {
+                        submitButton.disabled = false;
+                        submitButton.textContent = t.submitApplication;
+                    }
+                }
+            } else {
+                const firstInvalidField = form.querySelector('.invalid, .error-message[style*="block"]');
+                if (firstInvalidField) {
+                    firstInvalidField.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
+        });
+    }
+
+    // --- FAQ Accordion ---
+    function initializeFaqAccordion() {
+        const faqQuestions = document.querySelectorAll('.faq-question');
+        
+        faqQuestions.forEach(button => {
+            button.addEventListener('click', () => {
+                const item = button.closest('.faq-item');
+                if (item) {
+                    const isOpened = item.classList.toggle('open');
+                    button.setAttribute('aria-expanded', String(isOpened));
+                }
+            });
+        });
+    }
+
+    // --- Exit Intent Modal ---
+    function initializeExitIntentModal() {
+        const modal = document.getElementById('exit-intent-modal');
+        if (!modal) return;
+
+        const closeModalBtn = modal.querySelector('.modal-close-btn');
+        const modalShownInSession = sessionStorage.getItem('exitModalShown') === 'true';
+
+        if (modalShownInSession) {
+            return; // Don't set up anything if it's already been shown
+        }
+
+        const showModal = () => {
+            modal.classList.add('visible');
+            sessionStorage.setItem('exitModalShown', 'true');
+            // Clean up all triggers once shown
+            document.removeEventListener('mouseout', handleMouseOut);
+            window.removeEventListener('scroll', handleScroll);
+        };
+
+        const hideModal = () => {
+            modal.classList.remove('visible');
+        };
+
+        const handleMouseOut = (e: MouseEvent) => {
+            // Check if mouse is leaving the viewport top
+            if (e.clientY <= 0 && e.relatedTarget == null) {
+                showModal();
+            }
+        };
+
+        const handleScroll = () => {
+            const scrollPercent = (window.scrollY / (document.documentElement.scrollHeight - window.innerHeight)) * 100;
+            if (scrollPercent >= 50) {
+                showModal();
+            }
+        };
+
+        // Add triggers
+        document.addEventListener('mouseout', handleMouseOut);
+        window.addEventListener('scroll', handleScroll);
+
+        // Add closing event listeners
+        closeModalBtn?.addEventListener('click', hideModal);
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                hideModal();
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && modal.classList.contains('visible')) {
+                hideModal();
+            }
+        });
+    }
+    
+    // --- Home Page Partner Logos ---
+    function initializeHomePartners() {
+        const logoGrid = document.getElementById('home-partners-grid');
+        if (!logoGrid) return;
+
+        const partners = [
+            { src: 'https://cdn.asp.events/CLIENT_Mark_All_D856883D_926F_07B7_E9D09EE4984A0639/sites/inclusive-education-mena/media/Logos/Ed-logo.png', alt: 'Edarabia Logo' },
+            { src: 'https://res.cloudinary.com/dj3vhocuf/image/upload/v1761216928/Blue_Bold_Office_Idea_Logo_50_x_50_px_10_l68irx.png', alt: 'Sheraton Hotels & Resorts Logo', customClass: 'sheraton-logo' },
+            { src: 'https://i0.wp.com/blog.10times.com/wp-content/uploads/2019/09/cropped-10times-logo-hd.png?fit=3077%2C937&ssl=1', alt: '10times Logo' },
+            { src: 'https://www.eventbrite.com/blog/wp-content/uploads/2025/02/Eventbrite_Hero-Lock-up_Brite-Orange.png', alt: 'Eventbrite Logo', customClass: 'eventbrite-logo' },
+            { src: 'https://res.cloudinary.com/dj3vhocuf/image/upload/v1762105728/NB.hiloop.official.logo_1_wwcxzh.webp', alt: 'Hi Loop Logo' },
+            { src: 'https://res.cloudinary.com/dj3vhocuf/image/upload/v1762148595/Untitled_design_-_2025-11-03T111231.113_eejcdu.webp', alt: 'Lovable Logo' },
+            { src: 'https://res.cloudinary.com/dj3vhocuf/image/upload/v1762451007/Untitled_design_-_2025-11-06T231151.489_xy7rwx.png', alt: 'Marhaba Information Guide Logo', href: 'https://marhaba.qa/' }
+        ];
+        
+        logoGrid.innerHTML = '';
+
+        const createLogoItem = (partner: typeof partners[0]) => {
+            const logoItem = document.createElement('div');
+            logoItem.className = 'logo-item';
+            
+            const img = document.createElement('img');
+            img.alt = partner.alt;
+            img.loading = 'lazy';
+        
+            // Check if it's a Cloudinary URL to add responsive srcset
+            if (partner.src.includes('res.cloudinary.com')) {
+                const baseUrl = partner.src.replace('/upload/', '/upload/w_160,h_80,c_limit,q_auto,f_auto/');
+                const retinaUrl = partner.src.replace('/upload/', '/upload/w_320,h_160,c_limit,q_auto,f_auto/');
+                img.src = baseUrl;
+                img.srcset = `${baseUrl} 1x, ${retinaUrl} 2x`;
+            } else {
+                img.src = partner.src;
+            }
+        
+            if (partner.customClass) {
+                img.classList.add(partner.customClass);
+            }
+            
+            if (partner.href) {
+                const link = document.createElement('a');
+                link.href = partner.href;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.appendChild(img);
+                logoItem.appendChild(link);
+            } else {
+                logoItem.appendChild(img);
+            }
+            
+            return logoItem;
+        };
+
+        const fragment = document.createDocumentFragment();
+
+        // Append original logos
+        partners.forEach(partner => {
+            fragment.appendChild(createLogoItem(partner));
+        });
+
+        // Append duplicated logos for seamless scroll
+        partners.forEach(partner => {
+            const duplicateItem = createLogoItem(partner);
+            duplicateItem.setAttribute('aria-hidden', 'true');
+            fragment.appendChild(duplicateItem);
+        });
+
+        logoGrid.appendChild(fragment);
+    }
+
+    // --- Agenda Page Tabs ---
+    function initializeAgendaTabs() {
+        const tabsContainer = document.querySelector('.agenda-tabs');
+        if (!tabsContainer) return;
+
+        const tabButtons = tabsContainer.querySelectorAll('.tab-btn');
+        const contentPanels = document.querySelectorAll('.agenda-content');
+
+        tabsContainer.addEventListener('click', (e) => {
+            const clickedButton = (e.target as HTMLElement).closest('.tab-btn');
+            if (!clickedButton) return;
+
+            const tabId = (clickedButton as HTMLElement).dataset.tab;
+            
+            // Update buttons
+            tabButtons.forEach(btn => btn.classList.remove('active'));
+            clickedButton.classList.add('active');
+
+            // Update content panels
+            contentPanels.forEach(panel => {
+                panel.classList.toggle('active', panel.id === tabId);
+            });
+        });
+    }
+
+    // --- Brand Exposure Page: 360 Marketing Ecosystem Tabs ---
+    function initializeExposureTabs() {
+        const tabsContainer = document.querySelector('.exposure-tabs-container');
+        if (!tabsContainer) return;
+
+        const tabButtons = tabsContainer.querySelectorAll('.exposure-tab-btn');
+        const contentPanels = tabsContainer.querySelectorAll('.exposure-content');
+
+        tabsContainer.addEventListener('click', (e) => {
+            const clickedButton = (e.target as HTMLElement).closest('.exposure-tab-btn');
+            if (!clickedButton) return;
+
+            const tabId = (clickedButton as HTMLElement).dataset.tab;
+            
+            // Update buttons
+            tabButtons.forEach(btn => btn.classList.remove('active'));
+            clickedButton.classList.add('active');
+
+            // Update content panels
+            contentPanels.forEach(panel => {
+                panel.classList.toggle('active', panel.id === tabId);
+            });
+        });
+    }
+
+    // --- NEW: Impact Stats Number Animation on Scroll ---
+    function initializeImpactStats() {
+        const impactSection = document.getElementById('who-is-attending');
+        if (!impactSection) return;
+
+        const animateCountUp = (el: HTMLElement) => {
+            const target = parseInt(el.dataset.target || '0', 10);
+            if (isNaN(target)) return;
+            
+            // To prevent re-animating if it's already done
+            if (el.dataset.animated === 'true') return;
+            el.dataset.animated = 'true';
+            
+            el.textContent = '0+'; // Start from 0 for animation effect
+
+            const duration = 2000; // 2 seconds
+            const frameDuration = 1000 / 60; // 60fps
+            const totalFrames = Math.round(duration / frameDuration);
+            let frame = 0;
+
+            const counter = setInterval(() => {
+                frame++;
+                const progress = frame / totalFrames;
+                // Use an ease-out function for a smoother end
+                const easedProgress = 1 - Math.pow(1 - progress, 3);
+                const currentCount = Math.round(target * easedProgress);
+
+                el.textContent = currentCount.toLocaleString() + '+';
+
+                if (frame === totalFrames) {
+                    clearInterval(counter);
+                    el.textContent = target.toLocaleString() + '+'; // Ensure final value is accurate
+                }
+            }, frameDuration);
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    impactSection.classList.add('is-visible');
+                    const numbers = impactSection.querySelectorAll('.impact-number');
+                    numbers.forEach(num => animateCountUp(num as HTMLElement));
+                    observer.unobserve(impactSection); // Animate only once
+                }
+            });
+        }, {
+            threshold: 0.4 // Trigger when 40% of the element is visible
+        });
+
+        observer.observe(impactSection);
+    }
+
+    // --- NEW: Deck Request Modal & Form ---
+    function initializeDeckRequestModal() {
+        const openBtn = document.getElementById('open-deck-form-btn');
+        const exitModal = document.getElementById('exit-intent-modal');
+        const deckModal = document.getElementById('deck-request-modal');
+        
+        if (!deckModal) return; // Exit if the main modal isn't on the page
+
+        const closeBtn = deckModal.querySelector('.modal-close-btn');
+
+        const showDeckModal = () => {
+            if(exitModal) exitModal.classList.remove('visible');
+            deckModal.classList.add('visible');
+        };
+
+        const hideDeckModal = () => {
+            deckModal.classList.remove('visible');
+        };
+
+        // This listener is crucial for buttons on ALL pages.
+        // We use document.addEventListener to catch clicks even if the button is not present on the current page initially.
+        document.addEventListener('click', (e) => {
+            if ((e.target as HTMLElement).id === 'open-deck-form-btn') {
+                showDeckModal();
+            }
+        });
+
+        closeBtn?.addEventListener('click', hideDeckModal);
+
+        deckModal.addEventListener('click', (e) => {
+            if (e.target === deckModal) {
+                hideDeckModal();
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && deckModal.classList.contains('visible')) {
+                hideDeckModal();
+            }
+        });
+    }
+
+    function initializeDeckRequestForm() {
+        const form = document.getElementById('deck-request-form') as HTMLFormElement;
+        const successView = document.getElementById('deck-form-success');
+        const formContainer = document.getElementById('deck-form-container');
+
+        if (!form || !successView || !formContainer) return;
+
+        const requiredFields: HTMLElement[] = Array.from(form.querySelectorAll('[required]'));
+
+        requiredFields.forEach(field => {
+            field.addEventListener('input', () => validateField(field));
+            field.addEventListener('change', () => validateField(field));
+        });
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const isFormValid = requiredFields.map(field => validateField(field)).every(Boolean);
+
+            if (isFormValid) {
+                const submitButton = form.querySelector('button[type="submit"]') as HTMLButtonElement;
+                submitButton.disabled = true;
+                submitButton.textContent = t.submitting;
+
+                // This is the dedicated endpoint for deck requests.
+                const googleSheetWebAppUrl = 'https://script.google.com/macros/s/AKfycbzcmND809zEePZzvOLxxM1GolqWM1Lrh11JV9tdprNxSgkp-u0sjlxRzqXtmjDQDtn_2Q/exec';
+
+                try {
+                    const formData = new FormData(form);
+                    
+                    const response = await fetch(googleSheetWebAppUrl, {
+                        method: 'POST',
+                        body: new URLSearchParams(formData as any)
+                    });
+
+                    if (!response.ok) throw new Error(`Network response was not ok. Status: ${response.status}`);
+                    
+                    const result = await response.json();
+                    if (result.result !== 'success') throw new Error(result.error || 'The script returned an unknown error.');
+
+                    // Trigger download
+                    const link = document.createElement('a');
+                    link.href = '/assets/EduExpoQatar2026-Sponsorship-Deck.pdf';
+                    link.download = 'EduExpoQatar2026-Sponsorship-Deck.pdf';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    
+                    // Show success message
+                    formContainer.style.display = 'none';
+                    successView.style.display = 'block';
+
+                } catch (error) {
+                    console.error('Deck Request Submission Error:', error);
+                    alert(t.submissionErrorRequest + (error as Error).message);
+                    submitButton.disabled = false;
+                    submitButton.textContent = t.downloadNow;
+                }
+            } else {
+                const firstInvalidField = form.querySelector('.invalid, .error-message[style*="block"]');
+                if (firstInvalidField) {
+                    (firstInvalidField.closest('.form-group') as HTMLElement)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
+        });
+    }
+
+    // --- Page Load Initializers ---
+    highlightActiveNav();
+    initializeMobileNav();
+    initializeDropdowns();
+    initializeMainCountdown();
+    initializeContactForm(); 
+    initializeStudentRegistrationForm();
+    initializeBoothRegistrationForm();
+    initializeSponsorshipRegistrationForm();
+    initializeSpeakerRegistrationForm();
+    initializeSchoolGroupRegistrationForm();
+    initializeHackathonRegistrationForm();
+    initializeFaqAccordion();
+    initializeExitIntentModal();
+    initializeDeckRequestModal();
+    initializeDeckRequestForm();
+    initializeEarlyBirdCountdown();
+    initializeHomePartners();
+    initializeAgendaTabs();
+    initializeExposureTabs();
+    initializeImpactStats();
+});
